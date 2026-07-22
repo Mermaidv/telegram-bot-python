@@ -1,14 +1,16 @@
 import os
 import requests
+import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL_NAME = os.environ.get("MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_KEY")
+MODEL_NAME = os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or "anthropic/claude-3.5-sonnet"
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
+    
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type": "application/json"
@@ -17,17 +19,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "model": MODEL_NAME,
         "messages": [{"role": "user", "content": user_text}]
     }
-    
-    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
-    
-    if response.status_code == 200:
-        bot_reply = response.json()['choices'][0]['message']['content']
-    else:
-        bot_reply = f"Fehler bei OpenRouter: {response.status_code}"
+
+    loop = asyncio.get_running_loop()
+    try:
+        # Führt die synchrone HTTP-Anfrage im Hintergrund aus, ohne Telegram zu blockieren
+        response = await loop.run_in_executor(
+            None, 
+            lambda: requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data, timeout=30)
+        )
         
+        if response.status_code == 200:
+            bot_reply = response.json()['choices'][0]['message']['content']
+        else:
+            bot_reply = f"Fehler bei OpenRouter ({response.status_code}): {response.text}"
+    except Exception as e:
+        bot_reply = f"Verbindungsfehler: {str(e)}"
+
     await update.message.reply_text(bot_reply)
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
