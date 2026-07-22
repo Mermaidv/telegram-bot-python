@@ -20,16 +20,16 @@ ENV UV_PYTHON_DOWNLOADS=never \
     UV_NO_SYNC=1
 
 # Copy dependency files
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml ./
 
 # Install dependencies (no dev, skip project itself)
-RUN uv sync --locked --no-dev --no-install-project
+RUN uv sync --no-dev --no-install-project
 
 # Copy application code
 COPY . .
 
 # Install the project in non-editable mode
-RUN uv sync --locked --no-dev --no-editable
+RUN uv sync --no-dev --no-editable
 
 # Run bot
 CMD ["uv", "run", "main.py"]
