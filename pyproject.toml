@@ -10,8 +10,8 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "pytelegrambotapi>=4.30.0,<5",
-    "python-dotenv>=1.2.1,<2",
+    "python-telegram-bot>=20.0",
+    "requests",
 ]
 
 [tool.uv]
