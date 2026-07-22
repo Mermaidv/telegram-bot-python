@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL_NAME = os.environ.get("MODEL", "anthropic/claude-3.5-sonnet")
+MODEL_NAME = os.environ.get("MODEL", "anthropic/claude-3.5-sonnet:beta")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
