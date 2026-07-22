@@ -1,44 +1,33 @@
 import os
-import time
-import telebot
-from dotenv import load_dotenv
-from commands import register_commands
+import requests
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
-# Load environment variables
-load_dotenv()
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
+MODEL_NAME = os.environ.get("MODEL", "anthropic/claude-3.5-sonnet")
 
-# Replace 'TELEGRAM_BOT_TOKEN' with the token you received from BotFather
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-try:
-    bot = telebot.TeleBot(TOKEN)
-    register_commands(bot)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": MODEL_NAME,
+        "messages": [{"role": "user", "content": user_text}]
+    }
+    
+    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+    
+    if response.status_code == 200:
+        bot_reply = response.json()['choices'][0]['message']['content']
+    else:
+        bot_reply = f"Fehler bei OpenRouter: {response.status_code}"
+        
+    await update.message.reply_text(bot_reply)
 
-    @bot.message_handler(commands=['start', 'hello'])
-    def send_welcome(message):
-        """
-        Handle '/start' and '/hello' commands.
-
-        Args:
-            message (telebot.types.Message): The message object.
-        """
-        bot.reply_to(message, "Hello! I'm a simple Telegram bot.")
-
-    @bot.message_handler(func=lambda msg: True)
-    def echo_all(message):
-        """
-        Echo all incoming text messages back to the user.
-
-        Args:
-            message (telebot.types.Message): The message object.
-        """
-        bot.reply_to(message, message.text)
-
-    # Remove webhook to avoid conflicts with polling
-    bot.delete_webhook(drop_pending_updates=True)
-    bot.polling()
-
-except Exception as e:
-    print(f"CRITICAL ERROR: Failed to initialize bot with provided token. Error: {e}")
-    print("The application will hang to prevent a restart loop. Please fix the TELEGRAM_BOT_TOKEN environment variable.")
-    while True:
-        time.sleep(3600)
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.run_polling()
