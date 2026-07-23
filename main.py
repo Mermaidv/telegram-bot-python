@@ -14,7 +14,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Die offiziellen Anthropic-API-Header und die richtige URL:
     headers = {
-        "x-api-key": ANTHROPIC_KEY,
+        "Authorization": f"Bearer {ANTHROPIC_KEY}",
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json"
     }
