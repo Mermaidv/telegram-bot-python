@@ -18,6 +18,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json"
     }
+    }
     
     data = {
         "model": MODEL_NAME,
