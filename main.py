@@ -4,51 +4,48 @@ import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
+# Konfiguration aus Railway-Variablen laden
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-# Wir holen jetzt deinen neuen Anthropic-Key aus Railway:
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
-MODEL_NAME = os.environ.get("MODEL_NAME") or "claude-3-5-sonnet-20241022"
+MODEL_NAME = os.environ.get("MODEL_NAME", "claude-3-haiku-20240307")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-
-    # Die offiziellen Anthropic-API-Header und die richtige URL:
+    
+    # URL für die offizielle Anthropic-API
+    url = "https://api.anthropic.com/v1/messages"
+    
+    # Korrekter Header mit x-api-key und der geforderten Anthropic-Version
     headers = {
-        "Authorization": f"Bearer {ANTHROPIC_KEY}",
+        "x-api-key": ANTHROPIC_KEY,
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json"
     }
-    }
     
-    data = {
+    payload = {
         "model": MODEL_NAME,
         "max_tokens": 1000,
-        "messages": [{"role": "user", "content": user_text}]
+        "messages": [
+            {"role": "user", "content": user_text}
+        ]
     }
-
-    loop = asyncio.get_running_loop()
+    
     try:
-        # Direkter Aufruf der Anthropic Messages API
-        response = await loop.run_in_executor(
-            None,
-            lambda: requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=data
-            )
-        )
-        
+        # Anfrage an Anthropic senden (synchron via requests, in async eingebettet)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         res_json = response.json()
         
         if response.status_code == 200:
-            # Anthropic gibt die Antwort in einer Liste von Content-Blöcken zurück
+            # Antwort aus der Anthropic-Struktur extrahieren
             bot_reply = res_json["content"][0]["text"]
         else:
-            bot_reply = f"Fehler bei Anthropic ({response.status_code}): {res_json}"
-
+            # Fehlerausgabe direkt von Anthropic lesbar machen
+            error_msg = res_json.get("error", {}).get("message", str(res_json))
+            bot_reply = f"Fehler von Anthropic ({response.status_code}): {error_msg}"
+            
     except Exception as e:
-        bot_reply = f"Ein Fehler ist aufgetreten: {str(e)}"
-
+        bot_reply = f"Ein technischer Fehler ist aufgetreten: {str(e)}"
+        
     await update.message.reply_text(bot_reply)
 
 if __name__ == "__main__":
@@ -56,7 +53,8 @@ if __name__ == "__main__":
         raise ValueError("TELEGRAM_BOT_TOKEN fehlt!")
     if not ANTHROPIC_KEY:
         raise ValueError("ANTHROPIC_API_KEY fehlt!")
-
+        
+    # Telegram Bot initialisieren
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
