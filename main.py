@@ -36,11 +36,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         audio_path = "reply.mp3"
         speech_response.stream_to_file(audio_path)
         
-        # 3. Als echte Sprachnachricht an Telegram senden (funktioniert auf PC & Handy perfekt!)
+        # 3. Als echte Sprachnachricht an Telegram senden
         with open(audio_path, "rb") as audio_file:
             await update.message.reply_voice(voice=audio_file)
             
-        # Temporäre Datei wieder löschen
         if os.path.exists(audio_path):
             os.remove(audio_path)
             
