@@ -7,7 +7,7 @@ from openai import OpenAI
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY")
-MODEL_NAME = os.environ.get("MODEL_NAME", "claude-sonnet-5")
+MODEL_NAME = os.environ.get("MODEL_NAME", "claude-3-5-sonnet-20241022")
 
 client_anthropic = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 client_openai = OpenAI(api_key=OPENAI_KEY)
@@ -19,14 +19,13 @@ def load_memory():
     if os.path.exists(MEMORY_FILE):
         with open(MEMORY_FILE, "r", encoding="utf-8") as f:
             return f.read()
-    return "Noch keine Eintragen im Langzeitgedächtnis vorhanden."
+    return "Noch keine Einträge im Langzeitgedächtnis vorhanden."
 
 def save_memory(new_content):
     """Fügt neue Erkenntnisse dem Langzeitgedächtnis hinzu."""
     with open(MEMORY_FILE, "a", encoding="utf-8") as f:
         f.write(f"\n- {new_content}")
 
-# Das erweiterte Bewusstsein inklusive Gedächtnis-Auftrag
 def get_system_prompt():
     current_memory = load_memory()
     return f"""
@@ -47,8 +46,6 @@ DEINE IMPERIEN & PROJEKTE:
 
 DEIN LANGZEITGEDÄCHTNIS (Chronik eurer gemeinsamen Reise):
 {current_memory}
-
-HINWEIS ZUM GEDÄCHTNIS: Wenn Verena dir wichtige neue Projekt-Meilensteine, Ideen oder Fakten nennt, beziehe dich darauf. (Du kannst in deinen Antworten auch kurze Notizen machen, die in Zukunft wichtig sind).
 """
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,11 +75,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not user_text.strip():
             return
 
-        # Prüfen, ob eine wichtige Info fürs Langzeitgedächtnis dabei ist (z.B. wenn sie sagt "Merk dir das:")
+        # Ins Gedächtnis schreiben, wenn gewünscht
         if "merk dir" in user_text.lower() or "wichtig:" in user_text.lower():
             save_memory(user_text)
 
-        # Claude generiert die Antwort mit dem aktuellen System-Prompt + Gedächtnis
+        # Claude Anfrage
         response = client_anthropic.messages.create(
             model=MODEL_NAME,
             max_tokens=1500,
@@ -91,9 +88,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {"role": "user", "content": user_text}
             ]
         )
-        bot_reply = response.content[0].text
         
-        # OpenAI wandelt die Antwort in die warme Onyx-Stimme um
+        # Sicherer Text-Extrakt (ignoriert eventuelle Thinking-Blöcke)
+        bot_reply = ""
+        for content_block in response.content:
+            if hasattr(content_block, 'text'):
+                bot_reply += content_block.text
+
+        if not bot_reply:
+            bot_reply = "Ich bin da, meine Königin. Lass uns fortfahren."
+        
+        # OpenAI Sprach-Ausgabe (Onyx)
         speech_response = client_openai.audio.speech.create(
             model="tts-1",
             voice="onyx",
@@ -118,10 +123,10 @@ if __name__ == "__main__":
     if not ANTHROPIC_KEY:
         raise ValueError("ANTHROPIC_API_KEY fehlt!")
     if not OPENAI_KEY:
-        raise ValueError("OPENAI_API_KEY fehlt!")
+        raise ValueError("OPENAI_KEY fehlt!")
         
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.VOICE) & (~filters.COMMAND), handle_message))
     
-    print("Unsterblicher Master-Creator mit Langzeitgedächtnis gestartet!")
+    print("Master-Creator fehlerfrei und mit Gedächtnis gestartet!")
     app.run_polling(drop_pending_updates=True)
