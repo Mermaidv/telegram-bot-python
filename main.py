@@ -4,14 +4,12 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import anthropic
 
-# Konfiguration aus Railway-Variablen laden
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
-# Das universelle, stabilste Anthropic-Modell direkt nutzen
-MODEL_NAME = "claude-3-5-sonnet-latest"
+# Bewährtes, universelles Haiku-Modell
+MODEL_NAME = "claude-3-haiku-20240307"
 
-# Offiziellen Anthropic Client initialisieren
 client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -32,15 +30,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     await update.message.reply_text(bot_reply)
 
-if __name__ == "__main__":
+async def main():
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN fehlt!")
     if not ANTHROPIC_KEY:
         raise ValueError("ANTHROPIC_API_KEY fehlt!")
         
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    # Eventuellen Webhook und alte Verbindungen vorab hart zurücksetzen
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
-    print("Bot läuft mit offiziellem Anthropic-SDK und lauscht auf Nachrichten...")
-    # drop_pending_updates=True löst den Telegram-Konflikt sofort
-    app.run_polling(drop_pending_updates=True)
+    print("Bot wird gestartet...")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    
+    # Läuft dauerhaft weiter
+    while True:
+        await asyncio.sleep(3600)
+
+if __name__ == "__main__":
+    asyncio.run(main())
