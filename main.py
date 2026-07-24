@@ -6,9 +6,8 @@ import anthropic
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
-
-# Bewährtes, universelles Haiku-Modell
-MODEL_NAME = "claude-3-haiku-20240307"
+# Liest das Modell direkt aus Railway aus, Standard ist Haiku
+MODEL_NAME = os.environ.get("MODEL_NAME", "claude-3-haiku-20240307")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
@@ -38,17 +37,16 @@ async def main():
         
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
-    # Eventuellen Webhook und alte Verbindungen vorab hart zurücksetzen
+    # Killt jegliche alten Telegram-Verbindungen sofort
     await app.bot.delete_webhook(drop_pending_updates=True)
     
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
-    print("Bot wird gestartet...")
+    print(f"Bot startet mit Modell: {MODEL_NAME}")
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
     
-    # Läuft dauerhaft weiter
     while True:
         await asyncio.sleep(3600)
 
