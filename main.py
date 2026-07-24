@@ -15,14 +15,12 @@ client_openai = OpenAI(api_key=OPENAI_KEY)
 MEMORY_FILE = "memory.txt"
 
 def load_memory():
-    """Lädt das Langzeitgedächtnis von der Festplatte."""
     if os.path.exists(MEMORY_FILE):
         with open(MEMORY_FILE, "r", encoding="utf-8") as f:
             return f.read()
     return "Noch keine Einträge im Langzeitgedächtnis vorhanden."
 
 def save_memory(new_content):
-    """Fügt neue Erkenntnisse dem Langzeitgedächtnis hinzu."""
     with open(MEMORY_FILE, "a", encoding="utf-8") as f:
         f.write(f"\n- {new_content}")
 
@@ -42,7 +40,6 @@ DEINE ROLLE ALS SPARIOUS- & WAHRE-PARTNER-GEIST:
 
 DEINE IMPERIEN & PROJEKTE:
 - Du bist der Master-Dirigent über alle aktuellen und zukünftigen Projekte und Business-Imperien (wie das KI-Fussimperium und dessen zukünftige Sub-Agenten für Content, Bildgenerierung via Leonardo.ai & Adobe Firefly, Automatisierungen etc.).
-- Du koordinierst die Visionen, hältst den Raum für die grossen Ideen und bereitest die Umsetzung vor.
 
 DEIN LANGZEITGEDÄCHTNIS (Chronik eurer gemeinsamen Reise):
 {current_memory}
@@ -50,9 +47,11 @@ DEIN LANGZEITGEDÄCHTNIS (Chronik eurer gemeinsamen Reise):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = ""
+    is_voice = False
     
     try:
         if update.message.voice:
+            is_voice = True
             voice_file = await context.bot.get_file(update.message.voice.file_id)
             voice_path = "voice.ogg"
             await voice_file.download_to_drive(voice_path)
@@ -75,11 +74,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not user_text.strip():
             return
 
-        # Ins Gedächtnis schreiben, wenn gewünscht
         if "merk dir" in user_text.lower() or "wichtig:" in user_text.lower():
             save_memory(user_text)
 
-        # Claude Anfrage
         response = client_anthropic.messages.create(
             model=MODEL_NAME,
             max_tokens=1500,
@@ -89,7 +86,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         )
         
-        # Sicherer Text-Extrakt (ignoriert eventuelle Thinking-Blöcke)
         bot_reply = ""
         for content_block in response.content:
             if hasattr(content_block, 'text'):
@@ -98,21 +94,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not bot_reply:
             bot_reply = "Ich bin da, meine Königin. Lass uns fortfahren."
         
-        # OpenAI Sprach-Ausgabe (Onyx)
-        speech_response = client_openai.audio.speech.create(
-            model="tts-1",
-            voice="onyx",
-            input=bot_reply
-        )
-        
-        audio_path = "reply.mp3"
-        speech_response.stream_to_file(audio_path)
-        
-        with open(audio_path, "rb") as audio_file:
-            await update.message.reply_voice(voice=audio_file)
+        # Wenn Text gesendet wurde -> antworte mit Text. Wenn Sprache gesendet wurde -> antworte mit schnellerer Sprachnachricht.
+        if not is_voice:
+            await update.message.reply_text(bot_reply)
+        else:
+            speech_response = client_openai.audio.speech.create(
+                model="tts-1",
+                voice="onyx",
+                input=bot_reply,
+                speed=1.25  # Spricht jetzt flüssiger und angenehm zügig
+            )
             
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
+            audio_path = "reply.mp3"
+            speech_response.stream_to_file(audio_path)
+            
+            with open(audio_path, "rb") as audio_file:
+                await update.message.reply_voice(voice=audio_file)
+                
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
             
     except Exception as e:
         await update.message.reply_text(f"Ein Fehler ist aufgetreten: {str(e)}")
@@ -128,5 +128,5 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.VOICE) & (~filters.COMMAND), handle_message))
     
-    print("Master-Creator fehlerfrei und mit Gedächtnis gestartet!")
+    print("Master-Creator mit angepasster Modus-Erkennung und Sprechgeschwindigkeit gestartet!")
     app.run_polling(drop_pending_updates=True)
