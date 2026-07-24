@@ -16,7 +16,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     
     try:
-        # Offizieller, fehlerfreier Aufruf über die Anthropic-Library
+        # Offizieller Aufruf über die Anthropic-Library
         response = client.messages.create(
             model=MODEL_NAME,
             max_tokens=1000,
