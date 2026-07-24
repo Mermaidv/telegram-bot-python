@@ -12,6 +12,7 @@ classifiers = [
 dependencies = [
     "python-telegram-bot>=20.0",
     "requests",
+    "anthropic"
 ]
 
 [tool.uv]
