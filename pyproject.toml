@@ -1,10 +1,10 @@
 [project]
 name = "telegram-bot-python"
 version = "0.1.0"
-description = ""
-authors = [{ name = "aeither", email = "36173828+aeither@users.noreply.github.com" }]
-requires-python = ">=3.12"
+description = "Telegram Bot mit Claude und OpenAI"
 readme = "README.md"
+authors = [{ name = "aether", email = "36173828+aeither@users.noreply.github.com" }]
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
@@ -12,8 +12,8 @@ classifiers = [
 dependencies = [
     "python-telegram-bot>=20.0",
     "requests",
-    "anthropic"
-    "openai"
+    "anthropic",
+    "openai",
 ]
 
 [tool.uv]
