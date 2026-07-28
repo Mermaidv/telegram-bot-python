@@ -159,7 +159,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         response = client_anthropic.messages.create(
             model=MODEL_NAME,
-            max_tokens=1500,
+            max_tokens=2500,
             system=get_system_prompt(),
             messages=chat_histories[chat_id]
         )
