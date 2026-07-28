@@ -35,25 +35,38 @@ def save_memory(new_content):
         f.write(f"\n- {new_content}")
 
 def save_to_notion(category, content):
-    if not NOTION_TOKEN or not NOTION_DATABASE_ID:
-        print("Notion Token oder Database ID fehlt!")
-        return
-    
+    """Speichert einen Eintrag in Notion und meldet den tatsächlichen Erfolg zurück."""
+
+    if not NOTION_TOKEN:
+        print("❌ NOTION_TOKEN fehlt in Railway.")
+        return False, "NOTION_TOKEN fehlt"
+
+    if not NOTION_DATABASE_ID:
+        print("❌ NOTION_DATABASE_ID fehlt in Railway.")
+        return False, "NOTION_DATABASE_ID fehlt"
+
+    print("────────────────────────────────────────")
+    print("🟡 NOTION-SPEICHERVERSUCH")
+    print(f"Kategorie: {category}")
+    print(f"Inhalt: {content[:300]}")
+    print(f"Database-ID vorhanden: {bool(NOTION_DATABASE_ID)}")
+    print(f"Database-ID Länge: {len(NOTION_DATABASE_ID)}")
+    print(f"Token vorhanden: {bool(NOTION_TOKEN)}")
+
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
-    
-    # Schweizer Ortszeit für das Datum
+
     now_iso = datetime.datetime.now(ZoneInfo("Europe/Zurich")).isoformat()
 
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
             "Inhalt": {
-                "title": [{"text": {"content": content}}]
+                "title": [{"text": {"content": content[:2000]}}]
             },
             "Datum": {
                 "date": {"start": now_iso}
@@ -63,14 +76,39 @@ def save_to_notion(category, content):
             }
         }
     }
+
     try:
-        response = requests.post(url, json=payload, headers=headers)
-        if response.status_code == 200:
-            print(f"Erfolgreich in Notion gespeichert [{category}]: {content}")
-        else:
-            print(f"Fehler beim Speichern in Notion ({response.status_code}): {response.text}")
-    except Exception as e:
-        print(f"Notion Request Exception: {e}")
+        response = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=30
+        )
+
+        print(f"Notion HTTP-Status: {response.status_code}")
+        print(f"Notion-Antwort: {response.text[:2000]}")
+
+        if response.ok:
+            response_data = response.json()
+            page_id = response_data.get("id", "unbekannt")
+            print("✅ Erfolgreich in Notion gespeichert.")
+            print(f"Notion Page-ID: {page_id}")
+            print("────────────────────────────────────────")
+            return True, page_id
+
+        print("❌ Notion hat den Eintrag abgelehnt.")
+        print("────────────────────────────────────────")
+        return False, response.text
+
+    except requests.RequestException as error:
+        print(f"❌ Notion-Verbindungsfehler: {repr(error)}")
+        print("────────────────────────────────────────")
+        return False, str(error)
+
+    except Exception as error:
+        print(f"❌ Unerwarteter Notion-Fehler: {repr(error)}")
+        print("────────────────────────────────────────")
+        return False, str(error)
 
 def get_system_prompt():
     current_memory = load_memory()
@@ -191,14 +229,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_memory(memory_text)
             bot_reply = re.sub(r'\[ERINNERUNG:\s*.*?\]', '', bot_reply).strip()
 
-        # Notion-Einträge autonom verarbeiten (mit Fehlertoleranz für abgeschnittene Klammern)
-        notion_match = re.search(r'\[NOTION:\s*(.*?)\s*\|\s*(.*?)(?:\]|$)', bot_reply, re.DOTALL)
+        # Notion-Einträge erkennen und nur bei echtem API-Erfolg bestätigen
+        notion_match = re.search(
+            r'\[NOTION:\s*([^|\]]+?)\s*\|\s*(.*?)\]',
+            bot_reply,
+            re.DOTALL
+        )
+
         if notion_match:
             notion_category = notion_match.group(1).strip()
             notion_content = notion_match.group(2).strip()
-            notion_content = re.sub(r'\]$', '', notion_content).strip()
-            save_to_notion(notion_category, notion_content)
-            bot_reply = re.sub(r'\[NOTION:\s*.*?\]?', '', bot_reply, flags=re.DOTALL).strip()
+
+            allowed_categories = {
+                "Seelen-Tagebuch & Orakel",
+                "Business & Visionen",
+                "Persönlichkeitsentwicklung & Transformation",
+            }
+
+            # Technischen NOTION-Befehl aus der sichtbaren Antwort entfernen
+            bot_reply = re.sub(
+                r'\[NOTION:\s*[^|\]]+?\s*\|\s*.*?\]',
+                '',
+                bot_reply,
+                flags=re.DOTALL
+            ).strip()
+
+            if notion_category not in allowed_categories:
+                print(f"❌ Ungültige Notion-Kategorie: {notion_category}")
+                bot_reply += (
+                    "\n\n⚠️ Ich konnte den Eintrag nicht speichern, "
+                    "weil die erkannte Kategorie nicht gültig war."
+                )
+            else:
+                notion_success, notion_result = save_to_notion(
+                    notion_category,
+                    notion_content
+                )
+
+                if notion_success:
+                    bot_reply += (
+                        f"\n\n✅ Der Eintrag wurde erfolgreich in "
+                        f"„{notion_category}“ gespeichert."
+                    )
+                else:
+                    bot_reply += (
+                        "\n\n⚠️ Ich habe den Eintrag verstanden, aber die "
+                        "Speicherung in Notion ist fehlgeschlagen. "
+                        "Der genaue Fehler steht im Railway-Log."
+                    )
 
         chat_histories[chat_id].append({"role": "assistant", "content": bot_reply})
         
@@ -231,6 +309,12 @@ if __name__ == "__main__":
         raise ValueError("ANTHROPIC_API_KEY fehlt!")
     if not OPENAI_KEY:
         raise ValueError("OPENAI_KEY fehlt!")
+
+    if not NOTION_TOKEN:
+        print("⚠️ WARNUNG: NOTION_TOKEN fehlt. Notion-Speicherung funktioniert nicht.")
+
+    if not NOTION_DATABASE_ID:
+        print("⚠️ WARNUNG: NOTION_DATABASE_ID fehlt. Notion-Speicherung funktioniert nicht.")
         
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.VOICE) & (~filters.COMMAND), handle_message))
