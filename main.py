@@ -179,13 +179,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_memory(memory_text)
             bot_reply = re.sub(r'\[ERINNERUNG:\s*.*?\]', '', bot_reply).strip()
 
-        # Notion-Einträge autonom verarbeiten
-        notion_match = re.search(r'\[NOTION:\s*(.*?)\s*\|\s*(.*?)\]', bot_reply)
+      # Notion-Einträge autonom verarbeiten (auch wenn die Klammer durch Textlänge abgeschnitten wurde)
+        notion_match = re.search(r'\[NOTION:\s*(.*?)\s*\|\s*(.*?)(?:\]|$)', bot_reply, re.DOTALL)
         if notion_match:
             notion_category = notion_match.group(1).strip()
             notion_content = notion_match.group(2).strip()
+            # Falls am Ende noch Reste von Klammern da sind, säubern
+            notion_content = re.sub(r'\]$', '', notion_content).strip()
             save_to_notion(notion_category, notion_content)
-            bot_reply = re.sub(r'\[NOTION:\s*.*?\s*\|\s*.*?\]', '', bot_reply).strip()
+            bot_reply = re.sub(r'\[NOTION:\s*.*?\]?', '', bot_reply, flags=re.DOTALL).strip()
 
         chat_histories[chat_id].append({"role": "assistant", "content": bot_reply})
         
