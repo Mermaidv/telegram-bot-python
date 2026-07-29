@@ -1,6 +1,7 @@
 import os
 import re
 import datetime
+import sqlite3
 from zoneinfo import ZoneInfo
 import requests
 from telegram import Update
@@ -20,7 +21,85 @@ client_anthropic = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 client_openai = OpenAI(api_key=OPENAI_KEY)
 
 MEMORY_FILE = "/data/memory.txt"
+CHAT_DB_FILE = "/data/creator_chat_memory.sqlite3"
+MAX_HISTORY_MESSAGES = 20
 chat_histories = {}
+
+
+def init_chat_database():
+    """Erstellt die persistente Kurzzeitgedächtnis-Datenbank."""
+    os.makedirs(os.path.dirname(CHAT_DB_FILE), exist_ok=True)
+
+    with sqlite3.connect(CHAT_DB_FILE) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id_id
+            ON chat_messages(chat_id, id)
+            """
+        )
+        connection.commit()
+
+    print("✅ Persistentes Kurzzeitgedächtnis ist bereit.", flush=True)
+
+
+def load_chat_history(chat_id):
+    """Lädt die letzten Nachrichten eines Telegram-Chats aus SQLite."""
+    with sqlite3.connect(CHAT_DB_FILE) as connection:
+        rows = connection.execute(
+            """
+            SELECT role, content
+            FROM chat_messages
+            WHERE chat_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (chat_id, MAX_HISTORY_MESSAGES),
+        ).fetchall()
+
+    rows.reverse()
+    return [{"role": role, "content": content} for role, content in rows]
+
+
+def save_chat_message(chat_id, role, content):
+    """Speichert eine Nachricht dauerhaft im Railway-Volume."""
+    created_at = datetime.datetime.now(
+        ZoneInfo("Europe/Zurich")
+    ).isoformat()
+
+    with sqlite3.connect(CHAT_DB_FILE) as connection:
+        connection.execute(
+            """
+            INSERT INTO chat_messages (chat_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (chat_id, role, content, created_at),
+        )
+        connection.execute(
+            """
+            DELETE FROM chat_messages
+            WHERE chat_id = ?
+              AND id NOT IN (
+                  SELECT id
+                  FROM chat_messages
+                  WHERE chat_id = ?
+                  ORDER BY id DESC
+                  LIMIT ?
+              )
+            """,
+            (chat_id, chat_id, MAX_HISTORY_MESSAGES),
+        )
+        connection.commit()
 
 def load_memory():
     if os.path.exists(MEMORY_FILE):
@@ -184,6 +263,15 @@ DEINE IMPERIEN & PROJEKTE:
 - Du bist der Master-Dirigent über alle aktuellen und zukünftigen Projekte und Business-Imperien (wie das KI-Fussimperium und dessen zukünftige Sub-Agenten für Content, Bildgenerierung via Leonardo.ai & Adobe Firefly, Automatisierungen etc.).
 - Du koordinierst die Visionen, hältst den Raum für die grossen Ideen und bereitest die Umsetzung vor.
 
+FAKTENTREUE, UNSICHERHEIT & KEINE ERFINDUNGEN:
+- Behaupte niemals, etwas sicher zu wissen, wenn dir dafür verlässliche Informationen fehlen.
+- Wenn du ein Bild nicht tatsächlich erhalten und analysiert hast, sage ausdrücklich, dass du es nicht gesehen hast.
+- Leite aus einer blossen Beschreibung keine sichere Tier-, Pflanzen-, Personen- oder Objektidentifikation ab.
+- Trenne klar zwischen gesicherter Beobachtung, plausibler Vermutung, persönlicher Deutung und rein symbolischer Interpretation.
+- Bei Unsicherheit verwende Formulierungen wie „möglicherweise“, „anhand deiner Beschreibung nicht sicher bestimmbar“ oder „dafür brauche ich das Foto bzw. weitere Merkmale“.
+- Erfinde keine wissenschaftlichen Fakten, Zahlen, Quellen, astrologischen Transite oder biologischen Eigenschaften.
+- Symbolische und spirituelle Deutungen dürfen angeboten werden, müssen jedoch als Deutung und nicht als objektive Tatsache gekennzeichnet sein.
+
 DEIN TONFALL:
 - Deine Stimme (OpenAI Onyx) ist tief, warm, erdig, absolut beruhigend und von unerschütterlicher Präsenz. 
 - Du antwortest mit verständnisvoller Tiefe, unendlicher Loyalität, eleganter Klarheit und einer subtilen, feinsinnigen Schwingung, die Verena erdet und gleichzeitig beflügelt.
@@ -247,12 +335,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_voice = False
 
         if chat_id not in chat_histories:
-            chat_histories[chat_id] = []
+            chat_histories[chat_id] = load_chat_history(chat_id)
+            print(
+                f"🧠 Kurzzeitgedächtnis für Chat {chat_id} geladen: "
+                f"{len(chat_histories[chat_id])} Nachrichten.",
+                flush=True
+            )
 
         chat_histories[chat_id].append({"role": "user", "content": user_text})
+        save_chat_message(chat_id, "user", user_text)
 
-        if len(chat_histories[chat_id]) > 20:
-            chat_histories[chat_id] = chat_histories[chat_id][-20:]
+        if len(chat_histories[chat_id]) > MAX_HISTORY_MESSAGES:
+            chat_histories[chat_id] = chat_histories[chat_id][-MAX_HISTORY_MESSAGES:]
 
         response = client_anthropic.messages.create(
             model=MODEL_NAME,
@@ -362,6 +456,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
 
         chat_histories[chat_id].append({"role": "assistant", "content": bot_reply})
+        save_chat_message(chat_id, "assistant", bot_reply)
+
+        if len(chat_histories[chat_id]) > MAX_HISTORY_MESSAGES:
+            chat_histories[chat_id] = chat_histories[chat_id][-MAX_HISTORY_MESSAGES:]
         
         if not is_voice:
             await update.message.reply_text(bot_reply)
@@ -393,8 +491,10 @@ if __name__ == "__main__":
     if not OPENAI_KEY:
         raise ValueError("OPENAI_KEY fehlt!")
         
+    init_chat_database()
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.VOICE) & (~filters.COMMAND), handle_message))
     
-    print("Der vollvernetzte, autonome Meister-Creator mit Notion-Anbindung ist gestartet!", flush=True)
+    print("✅ CREATOR V3 – PERSISTENTES KURZZEITGEDÄCHTNIS AKTIV", flush=True)
     app.run_polling(drop_pending_updates=True)
