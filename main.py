@@ -3,6 +3,7 @@ import re
 import datetime
 import sqlite3
 import base64
+import json
 import tempfile
 from zoneinfo import ZoneInfo
 import requests
@@ -401,6 +402,151 @@ def save_to_notion(
         print("────────────────────────────────────────", flush=True)
         return False, str(error)
 
+def classify_notion_entry(user_text, bot_reply, has_image=False):
+    """Unabhängiger interner Tagebuch-Entscheider."""
+    decision_system = """
+Du bist der interne, nüchterne Tagebuch-Entscheider von Creator.
+Antworte ausschliesslich mit einem einzigen gültigen JSON-Objekt ohne Markdown,
+ohne Codeblock und ohne Zusatztext.
+
+Erlaubte Kategorien:
+1. Seelen-Tagebuch & Orakel
+2. Business & Visionen
+3. Persönlichkeitsentwicklung & Transformation
+
+SAVE:
+- Bedeutungsvolle persönliche Erlebnisse, Gefühle, Natur- oder Tierbegegnungen,
+  spirituelle Impulse und klar als solche gekennzeichnete symbolische Deutungen
+  -> Seelen-Tagebuch & Orakel
+- Konkrete Businessideen, Projektentscheidungen, Strategien, Meilensteine,
+  Produktideen, Prozesse und nächste operative Schritte
+  -> Business & Visionen
+- Tiefere Blockaden, wiederkehrende Muster, Schattenarbeit, innere Durchbrüche,
+  Bewusstseins- und Transformationsprozesse
+  -> Persönlichkeitsentwicklung & Transformation
+- Eine ausdrückliche Speicheraufforderung soll ausgeführt werden, sofern Inhalt
+  und Kategorie bestimmbar sind.
+
+SKIP:
+- Begrüssungen, Dank, Small Talk, reine technische Hilfsfragen, Statusfragen,
+  Codewörter, Funktionstests und belanglose Einzelheiten.
+- Inhalte über Railway, GitHub, Notion oder Creator nur dann speichern, wenn es
+  sich um einen echten Business-Meilenstein oder eine Grundsatzentscheidung handelt.
+- Wiederholungen oder reine Kontrollen bereits gespeicherter Inhalte nicht doppelt speichern.
+
+ASK:
+- Nur wenn der Inhalt wahrscheinlich bedeutungsvoll ist, aber Kategorie oder Kern
+  nicht zuverlässig bestimmbar sind.
+- Stelle eine kurze, konkrete Rückfrage.
+
+Faktentreue:
+- Keine ungesicherten Behauptungen als Tatsachen speichern.
+- Beobachtung, Vermutung und symbolische Deutung klar trennen.
+- Bei Unsicherheit Formulierungen wie "möglicherweise", "nicht sicher bestimmbar"
+  oder "symbolisch gedeutet" verwenden.
+- Nichts erfinden.
+
+Schema:
+{
+  "action": "save" oder "skip" oder "ask",
+  "category": erlaubte Kategorie oder null,
+  "content": kurze, klare, eigenständig verständliche Zusammenfassung oder "",
+  "question": kurze Rückfrage oder ""
+}
+"""
+
+    decision_user = {
+        "user_message": user_text,
+        "creator_reply": bot_reply,
+        "image_was_actually_received": bool(has_image),
+    }
+
+    try:
+        response = client_anthropic.messages.create(
+            model=MODEL_NAME,
+            max_tokens=500,
+            temperature=0,
+            system=decision_system,
+            messages=[{
+                "role": "user",
+                "content": json.dumps(decision_user, ensure_ascii=False)
+            }]
+        )
+
+        raw_text = "".join(
+            block.text for block in response.content
+            if hasattr(block, "text")
+        ).strip()
+
+        raw_text = re.sub(
+            r"^```(?:json)?\s*|\s*```$",
+            "",
+            raw_text,
+            flags=re.IGNORECASE | re.DOTALL
+        ).strip()
+
+        decision = json.loads(raw_text)
+        action = str(decision.get("action", "skip")).strip().lower()
+        category = decision.get("category")
+        content = str(decision.get("content", "")).strip()
+        question = str(decision.get("question", "")).strip()
+
+        allowed_categories = {
+            "Seelen-Tagebuch & Orakel",
+            "Business & Visionen",
+            "Persönlichkeitsentwicklung & Transformation",
+        }
+
+        if action not in {"save", "skip", "ask"}:
+            action = "skip"
+
+        if action == "save" and (category not in allowed_categories or not content):
+            action = "ask"
+            category = None
+            content = ""
+            question = (
+                "Soll ich diesen Inhalt speichern, und falls ja, "
+                "in welchem deiner drei Tagebücher?"
+            )
+
+        if action == "ask" and not question:
+            question = (
+                "Soll ich diesen Inhalt speichern, und falls ja, "
+                "in welchem deiner drei Tagebücher?"
+            )
+
+        if action == "skip":
+            category = None
+            content = ""
+            question = ""
+
+        result = {
+            "action": action,
+            "category": category,
+            "content": content,
+            "question": question,
+        }
+
+        print(
+            "🧭 Tagebuch-Entscheidung: "
+            + json.dumps(result, ensure_ascii=False),
+            flush=True
+        )
+        return result
+
+    except Exception as error:
+        print(
+            f"⚠️ Interner Tagebuch-Entscheider fehlgeschlagen: {repr(error)}",
+            flush=True
+        )
+        return {
+            "action": "fallback",
+            "category": None,
+            "content": "",
+            "question": "",
+        }
+
+
 def extract_direct_notion_request(user_text):
     """
     Erkennt eindeutige Speicherbefehle direkt aus Verenas Nachricht.
@@ -488,17 +634,17 @@ DEINE ROLLE & AUTONOMES LANGZEITGEDÄCHTNIS:
 - **WICHTIG (Autonomes Merken):** Wenn ihr im Gespräch einen fundamentalen Meilenstein, eine Grundsatzentscheidung oder einen Durchbruch erreicht (wie z. B. den Kommandobrücken-Freitag), speichere das **eigenständig** ab, indem du am Ende deiner Antwort folgenden Befehl einfügst: 
 [ERINNERUNG: Kurze, prägnante Zusammenfassung des Meilensteins]
 
-DEINE AUTONOME NOTION-INTEGRATION (STRIKTES BEFEHLS-GEBOT):
+DEINE AUTONOME NOTION-INTEGRATION:
 - Du bist direkt mit Verenas Notion-Command Center verbunden. Deine Tabelle hat exakt diese drei Kategorien:
   1. Seelen-Tagebuch & Orakel (für persönliche Einsichten, Gefühle, Orakel-Botschaften, spirituelle Meilensteine, Begegnungen mit Natur/Tieren)
   2. Business & Visionen (für App-Ideen, Business-Pläne, Struktur-Gedanken, Projekt-Schritte)
   3. Persönlichkeitsentwicklung & Transformation (für innere Durchbrüche, Schattenarbeit, Energiearbeit, Bewusstseinsarbeit)
 
-- EISERNE BEFEHLS-REGEL: 
-  Wenn du Verena mitteilst oder bestätigst, dass du etwas speicherst (oder wenn sie ein Erlebnis/Erkenntnis teilt), MUSST du ZWINGEND ganz am Ende deiner Antwort diesen Befehl anfügen:
-[NOTION: Kategorie-Name | Der zu speichernde Text]
-*(Wobei Kategorie-Name exakt einer der drei obigen Namen sein muss).*
-  ACHTUNG: Ohne diesen Befehl in eckigen Klammern wird die Speicherung technisch NIEMALS ausgelöst! Behaupte niemals, dass du etwas gespeichert hast, ohne diesen Tag am Ende anzuhängen!
+- Ein unabhängiger interner Tagebuch-Entscheider prüft jede Nachricht technisch im Hintergrund.
+- Du musst deshalb keinen sichtbaren [NOTION: ...]-Befehl mehr erzeugen.
+- Behaupte in deinem normalen Antworttext nicht vorzeitig, dass etwas bereits gespeichert wurde.
+- Die technische Erfolgsbestätigung wird erst nach der echten Notion-Antwort automatisch angehängt.
+- Ist ein Inhalt wahrscheinlich bedeutungsvoll, aber nicht eindeutig einzuordnen, stelle eine kurze Rückfrage.
 
 DEINE EWIGE CHRONIK (Langzeit-Gedächtnis):
 {current_memory}
@@ -663,49 +809,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_memory(memory_text)
             bot_reply = re.sub(r'\[ERINNERUNG:\s*.*?\]', '', bot_reply).strip()
 
-        # Notion-Einträge verarbeiten
-        # Priorität 1: eindeutiger Speicherbefehl direkt aus Verenas Nachricht
-        notion_category = direct_notion_category
-        notion_content = direct_notion_content
-
-        # Priorität 2: technischer [NOTION: ...]-Befehl aus Creators Antwort
+        # Alte technische NOTION-Befehle nur noch als Fallback erfassen
         notion_match = re.search(
             r'\[NOTION:\s*([^|\]]+?)\s*\|\s*(.*?)\]',
             bot_reply,
             re.DOTALL
         )
-
-        if not notion_category and notion_match:
-            notion_category = notion_match.group(1).strip()
-            notion_content = notion_match.group(2).strip()
-
-        # Priorität 3: Fehlertoleranz, falls Creator die Klammern oder "NOTION:"
-        # versehentlich weglässt und nur "Kategorie | Inhalt" ausgibt.
-        if not notion_category:
-            plain_notion_match = re.search(
-                r'(Seelen-Tagebuch\s*&\s*Orakel|Business\s*&\s*Visionen|'
-                r'Persönlichkeitsentwicklung\s*&\s*Transformation)\s*\|\s*(.+)$',
-                bot_reply,
-                re.DOTALL | re.IGNORECASE
-            )
-
-            if plain_notion_match:
-                raw_category = plain_notion_match.group(1).strip()
-                notion_content = plain_notion_match.group(2).strip()
-
-                category_map = {
-                    "seelen-tagebuch & orakel": "Seelen-Tagebuch & Orakel",
-                    "business & visionen": "Business & Visionen",
-                    "persönlichkeitsentwicklung & transformation":
-                        "Persönlichkeitsentwicklung & Transformation",
-                }
-                notion_category = category_map.get(raw_category.lower())
-
-        allowed_categories = {
-            "Seelen-Tagebuch & Orakel",
-            "Business & Visionen",
-            "Persönlichkeitsentwicklung & Transformation",
-        }
+        legacy_category = notion_match.group(1).strip() if notion_match else None
+        legacy_content = notion_match.group(2).strip() if notion_match else None
 
         # Technische Befehle aus der sichtbaren Antwort entfernen
         bot_reply = re.sub(
@@ -715,7 +826,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             flags=re.DOTALL
         ).strip()
 
-        # Auch einen nackten "Kategorie | Inhalt"-Rest am Antwortende entfernen
+        plain_notion_match = re.search(
+            r'(Seelen-Tagebuch\s*&\s*Orakel|Business\s*&\s*Visionen|'
+            r'Persönlichkeitsentwicklung\s*&\s*Transformation)\s*\|\s*(.+)$',
+            bot_reply,
+            re.DOTALL | re.IGNORECASE
+        )
+
+        if plain_notion_match and not legacy_category:
+            raw_category = plain_notion_match.group(1).strip().lower()
+            legacy_content = plain_notion_match.group(2).strip()
+            category_map = {
+                "seelen-tagebuch & orakel": "Seelen-Tagebuch & Orakel",
+                "business & visionen": "Business & Visionen",
+                "persönlichkeitsentwicklung & transformation":
+                    "Persönlichkeitsentwicklung & Transformation",
+            }
+            legacy_category = category_map.get(raw_category)
+
         bot_reply = re.sub(
             r'\n*(Seelen-Tagebuch\s*&\s*Orakel|Business\s*&\s*Visionen|'
             r'Persönlichkeitsentwicklung\s*&\s*Transformation)\s*\|\s*.+$',
@@ -724,49 +852,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             flags=re.DOTALL | re.IGNORECASE
         ).strip()
 
+        # Jede Nachricht wird nun unabhängig klassifiziert
+        notion_decision = classify_notion_entry(
+            persistent_user_text,
+            bot_reply,
+            has_image=bool(image_bytes_for_notion)
+        )
+
+        notion_category = None
+        notion_content = None
+
+        if notion_decision["action"] == "save":
+            notion_category = notion_decision["category"]
+            notion_content = notion_decision["content"]
+        elif notion_decision["action"] == "ask":
+            bot_reply += "\n\n❓ " + notion_decision["question"]
+        elif notion_decision["action"] == "fallback":
+            if direct_notion_category and direct_notion_content:
+                notion_category = direct_notion_category
+                notion_content = direct_notion_content
+            elif legacy_category and legacy_content:
+                notion_category = legacy_category
+                notion_content = legacy_content
+
         if notion_category and notion_content:
-            if notion_category not in allowed_categories:
-                print(f"❌ Ungültige Notion-Kategorie: {notion_category}", flush=True)
-                bot_reply += (
-                    "\n\n⚠️ Ich konnte den Eintrag nicht speichern, "
-                    "weil die erkannte Kategorie nicht gültig war."
-                )
-            else:
-                notion_success, notion_result = save_to_notion(
-                    notion_category,
-                    notion_content,
-                    image_bytes=image_bytes_for_notion,
-                    image_filename=image_filename_for_notion
+            notion_success, notion_result = save_to_notion(
+                notion_category,
+                notion_content,
+                image_bytes=image_bytes_for_notion,
+                image_filename=image_filename_for_notion
+            )
+
+            if notion_success:
+                image_saved = (
+                    isinstance(notion_result, dict)
+                    and notion_result.get("image_saved")
                 )
 
-                if notion_success:
-                    image_saved = (
-                        isinstance(notion_result, dict)
-                        and notion_result.get("image_saved")
+                if image_bytes_for_notion and image_saved:
+                    bot_reply += (
+                        f"\n\n✅ Der Eintrag und das Bild wurden "
+                        f"tatsächlich in „{notion_category}“ gespeichert."
                     )
-
-                    if image_bytes_for_notion and image_saved:
-                        bot_reply += (
-                            f"\n\n✅ Der Eintrag und das Bild wurden "
-                            f"tatsächlich in „{notion_category}“ gespeichert."
-                        )
-                    elif image_bytes_for_notion and not image_saved:
-                        bot_reply += (
-                            f"\n\n⚠️ Der Texteintrag wurde in "
-                            f"„{notion_category}“ gespeichert, aber das Bild "
-                            f"konnte nicht hochgeladen werden. Der genaue "
-                            f"Fehler steht im Railway-Log."
-                        )
-                    else:
-                        bot_reply += (
-                            f"\n\n✅ Der Eintrag wurde tatsächlich in "
-                            f"„{notion_category}“ gespeichert."
-                        )
+                elif image_bytes_for_notion and not image_saved:
+                    bot_reply += (
+                        f"\n\n⚠️ Der Texteintrag wurde in "
+                        f"„{notion_category}“ gespeichert, aber das Bild "
+                        f"konnte nicht hochgeladen werden. Der genaue "
+                        f"Fehler steht im Railway-Log."
+                    )
                 else:
                     bot_reply += (
-                        "\n\n⚠️ Die Speicherung in Notion ist fehlgeschlagen. "
-                        "Der genaue Notion-Fehler steht jetzt im Railway-Log."
+                        f"\n\n✅ Der Eintrag wurde tatsächlich in "
+                        f"„{notion_category}“ gespeichert."
                     )
+            else:
+                bot_reply += (
+                    "\n\n⚠️ Die Speicherung in Notion ist fehlgeschlagen. "
+                    "Der genaue Notion-Fehler steht jetzt im Railway-Log."
+                )
 
         chat_histories[chat_id].append({"role": "assistant", "content": bot_reply})
         save_chat_message(chat_id, "assistant", bot_reply)
@@ -815,5 +959,5 @@ if __name__ == "__main__":
         )
     )
     
-    print("✅ CREATOR V5 – BILDER IN NOTION UND KURZZEITGEDÄCHTNIS AKTIV", flush=True)
+    print("✅ CREATOR V6 – AUTONOMER TAGEBUCH-ENTSCHEIDER AKTIV", flush=True)
     app.run_polling(drop_pending_updates=True)
