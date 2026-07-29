@@ -2,6 +2,8 @@ import os
 import re
 import datetime
 import sqlite3
+import base64
+import tempfile
 from zoneinfo import ZoneInfo
 import requests
 from telegram import Update
@@ -299,6 +301,8 @@ DEINE EWIGE CHRONIK (Langzeit-Gedächtnis):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = ""
     is_voice = False
+    image_content_block = None
+    persistent_user_text = ""
     chat_id = update.effective_chat.id
     
     try:
@@ -318,13 +322,67 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if os.path.exists(voice_path):
                 os.remove(voice_path)
                 
+        elif update.message.photo:
+            # Telegram liefert mehrere Auflösungen; die letzte ist die grösste.
+            photo = update.message.photo[-1]
+            telegram_file = await context.bot.get_file(photo.file_id)
+
+            # Temporäre JPEG-Datei für die Übergabe an Claude.
+            with tempfile.NamedTemporaryFile(
+                suffix=".jpg",
+                delete=False
+            ) as temp_file:
+                photo_path = temp_file.name
+
+            try:
+                await telegram_file.download_to_drive(photo_path)
+
+                with open(photo_path, "rb") as image_file:
+                    image_base64 = base64.b64encode(
+                        image_file.read()
+                    ).decode("utf-8")
+
+                image_content_block = {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": image_base64
+                    }
+                }
+
+                caption = (update.message.caption or "").strip()
+
+                if caption:
+                    user_text = caption
+                else:
+                    user_text = (
+                        "Ich sende dir dieses Bild ohne Bildunterschrift. "
+                        "Betrachte es sorgfältig und beschreibe nur, was du "
+                        "tatsächlich erkennen kannst. Wenn eine genaue "
+                        "Identifikation nicht sicher möglich ist, sage das "
+                        "ausdrücklich. Frage mich bei Bedarf nach dem Kontext."
+                    )
+
+                persistent_user_text = (
+                    f"[FOTO EMPFANGEN] {user_text}"
+                )
+
+            finally:
+                if os.path.exists(photo_path):
+                    os.remove(photo_path)
+
         elif update.message.text:
             user_text = update.message.text
+            persistent_user_text = user_text
         else:
             return
 
         if not user_text.strip():
             return
+
+        if not persistent_user_text:
+            persistent_user_text = user_text
 
         # Direkter, zuverlässiger Notion-Speicherbefehl:
         # Wird bereits aus Verenas eigener Nachricht erkannt.
@@ -342,8 +400,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 flush=True
             )
 
-        chat_histories[chat_id].append({"role": "user", "content": user_text})
-        save_chat_message(chat_id, "user", user_text)
+        if image_content_block:
+            current_user_content = [
+                image_content_block,
+                {
+                    "type": "text",
+                    "text": user_text
+                }
+            ]
+        else:
+            current_user_content = user_text
+
+        chat_histories[chat_id].append({
+            "role": "user",
+            "content": current_user_content
+        })
+        save_chat_message(
+            chat_id,
+            "user",
+            persistent_user_text
+        )
 
         if len(chat_histories[chat_id]) > MAX_HISTORY_MESSAGES:
             chat_histories[chat_id] = chat_histories[chat_id][-MAX_HISTORY_MESSAGES:]
@@ -494,7 +570,13 @@ if __name__ == "__main__":
     init_chat_database()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler((filters.TEXT | filters.VOICE) & (~filters.COMMAND), handle_message))
+    app.add_handler(
+        MessageHandler(
+            (filters.TEXT | filters.VOICE | filters.PHOTO)
+            & (~filters.COMMAND),
+            handle_message
+        )
+    )
     
-    print("✅ CREATOR V3 – PERSISTENTES KURZZEITGEDÄCHTNIS AKTIV", flush=True)
+    print("✅ CREATOR V4 – BILDVERSTÄNDNIS UND KURZZEITGEDÄCHTNIS AKTIV", flush=True)
     app.run_polling(drop_pending_updates=True)
