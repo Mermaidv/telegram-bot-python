@@ -465,7 +465,6 @@ Schema:
         response = client_anthropic.messages.create(
             model=MODEL_NAME,
             max_tokens=500,
-            temperature=0,
             system=decision_system,
             messages=[{
                 "role": "user",
