@@ -115,12 +115,124 @@ def save_memory(new_content):
     with open(MEMORY_FILE, "a", encoding="utf-8") as f:
         f.write(f"\n- {new_content}")
 
-def save_to_notion(category, content):
+def upload_image_to_notion(image_bytes, filename="telegram_foto.jpg"):
     """
-    Speichert einen Eintrag in Notion und gibt den tatsächlichen Erfolg zurück.
+    Lädt ein kleines Bild bis 20 MB in Notion hoch.
     Rückgabe:
-        (True, page_id) bei Erfolg
+        (True, file_upload_id) bei Erfolg
         (False, fehlermeldung) bei Fehler
+    """
+    if not image_bytes:
+        return False, "Keine Bilddaten vorhanden"
+
+    create_headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Notion-Version": "2026-03-11"
+    }
+
+    create_payload = {
+        "mode": "single_part",
+        "filename": filename,
+        "content_type": "image/jpeg"
+    }
+
+    try:
+        print("🖼️ Notion-Bildupload wird vorbereitet.", flush=True)
+
+        create_response = requests.post(
+            "https://api.notion.com/v1/file_uploads",
+            json=create_payload,
+            headers=create_headers,
+            timeout=30
+        )
+
+        print(
+            f"Notion File-Create Status: {create_response.status_code}",
+            flush=True
+        )
+        print(
+            f"Notion File-Create Antwort: {create_response.text[:1500]}",
+            flush=True
+        )
+
+        if not create_response.ok:
+            return False, create_response.text
+
+        upload_data = create_response.json()
+        file_upload_id = upload_data.get("id")
+
+        if not file_upload_id:
+            return False, "Notion lieferte keine File-Upload-ID"
+
+        send_headers = {
+            "Authorization": f"Bearer {NOTION_TOKEN}",
+            "Accept": "application/json",
+            "Notion-Version": "2026-03-11"
+        }
+
+        files = {
+            "file": (
+                filename,
+                image_bytes,
+                "image/jpeg"
+            )
+        }
+
+        send_response = requests.post(
+            (
+                "https://api.notion.com/v1/file_uploads/"
+                f"{file_upload_id}/send"
+            ),
+            headers=send_headers,
+            files=files,
+            timeout=60
+        )
+
+        print(
+            f"Notion File-Send Status: {send_response.status_code}",
+            flush=True
+        )
+        print(
+            f"Notion File-Send Antwort: {send_response.text[:1500]}",
+            flush=True
+        )
+
+        if not send_response.ok:
+            return False, send_response.text
+
+        print(
+            f"✅ Bild erfolgreich zu Notion hochgeladen: "
+            f"{file_upload_id}",
+            flush=True
+        )
+        return True, file_upload_id
+
+    except requests.RequestException as error:
+        print(
+            f"❌ Notion-Bildupload Verbindungsfehler: {repr(error)}",
+            flush=True
+        )
+        return False, str(error)
+
+    except Exception as error:
+        print(
+            f"❌ Unerwarteter Notion-Bildupload-Fehler: {repr(error)}",
+            flush=True
+        )
+        return False, str(error)
+
+
+def save_to_notion(
+    category,
+    content,
+    image_bytes=None,
+    image_filename="telegram_foto.jpg"
+):
+    """
+    Speichert Text und optional ein Bild in Notion.
+    Das Bild wird in der Spalte „Bild“ und gross im Seiteninhalt abgelegt.
     """
     if not NOTION_TOKEN:
         print("❌ NOTION_TOKEN fehlt in Railway.", flush=True)
@@ -137,27 +249,112 @@ def save_to_notion(category, content):
         "Notion-Version": "2022-06-28"
     }
 
-    now_iso = datetime.datetime.now(ZoneInfo("Europe/Zurich")).isoformat()
+    now_iso = datetime.datetime.now(
+        ZoneInfo("Europe/Zurich")
+    ).isoformat()
 
-    payload = {
-        "parent": {"database_id": NOTION_DATABASE_ID.strip()},
-        "properties": {
-            "Inhalt": {
-                "title": [{"text": {"content": content[:2000]}}]
-            },
-            "Datum": {
-                "date": {"start": now_iso}
-            },
-            "Kategorie": {
-                "select": {"name": category}
+    file_upload_id = None
+    image_upload_error = None
+
+    if image_bytes:
+        image_success, image_result = upload_image_to_notion(
+            image_bytes,
+            image_filename
+        )
+
+        if image_success:
+            file_upload_id = image_result
+        else:
+            image_upload_error = image_result
+            print(
+                "⚠️ Der Text wird gespeichert, obwohl der "
+                "Bildupload fehlgeschlagen ist.",
+                flush=True
+            )
+
+    properties = {
+        "Inhalt": {
+            "title": [
+                {
+                    "text": {
+                        "content": content[:2000]
+                    }
+                }
+            ]
+        },
+        "Datum": {
+            "date": {
+                "start": now_iso
+            }
+        },
+        "Kategorie": {
+            "select": {
+                "name": category
             }
         }
     }
+
+    children = []
+
+    if file_upload_id:
+        properties["Bild"] = {
+            "files": [
+                {
+                    "type": "file_upload",
+                    "file_upload": {
+                        "id": file_upload_id
+                    },
+                    "name": image_filename
+                }
+            ]
+        }
+
+        children.append(
+            {
+                "object": "block",
+                "type": "image",
+                "image": {
+                    "type": "file_upload",
+                    "file_upload": {
+                        "id": file_upload_id
+                    }
+                }
+            }
+        )
+
+        children.append(
+            {
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {
+                                "content": content[:2000]
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+
+    payload = {
+        "parent": {
+            "database_id": NOTION_DATABASE_ID.strip()
+        },
+        "properties": properties
+    }
+
+    if children:
+        payload["children"] = children
 
     print("────────────────────────────────────────", flush=True)
     print("🟡 NOTION-SPEICHERVERSUCH", flush=True)
     print(f"Kategorie: {category}", flush=True)
     print(f"Inhalt: {content[:300]}", flush=True)
+    print(f"Bild vorhanden: {bool(image_bytes)}", flush=True)
+    print(f"Bild hochgeladen: {bool(file_upload_id)}", flush=True)
     print(f"Database-ID vorhanden: {bool(NOTION_DATABASE_ID)}", flush=True)
     print(f"Database-ID Länge: {len(NOTION_DATABASE_ID.strip())}", flush=True)
     print(f"Token vorhanden: {bool(NOTION_TOKEN)}", flush=True)
@@ -167,7 +364,7 @@ def save_to_notion(category, content):
             url,
             json=payload,
             headers=headers,
-            timeout=30
+            timeout=45
         )
 
         print(f"Notion HTTP-Status: {response.status_code}", flush=True)
@@ -176,9 +373,19 @@ def save_to_notion(category, content):
         if response.ok:
             response_data = response.json()
             page_id = response_data.get("id", "unbekannt")
-            print(f"✅ Erfolgreich in Notion gespeichert. Page-ID: {page_id}", flush=True)
+
+            print(
+                f"✅ Erfolgreich in Notion gespeichert. "
+                f"Page-ID: {page_id}",
+                flush=True
+            )
             print("────────────────────────────────────────", flush=True)
-            return True, page_id
+
+            return True, {
+                "page_id": page_id,
+                "image_saved": bool(file_upload_id),
+                "image_error": image_upload_error
+            }
 
         print("❌ Notion hat den Eintrag abgelehnt.", flush=True)
         print("────────────────────────────────────────", flush=True)
@@ -193,7 +400,6 @@ def save_to_notion(category, content):
         print(f"❌ Unerwarteter Notion-Fehler: {repr(error)}", flush=True)
         print("────────────────────────────────────────", flush=True)
         return False, str(error)
-
 
 def extract_direct_notion_request(user_text):
     """
@@ -302,6 +508,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = ""
     is_voice = False
     image_content_block = None
+    image_bytes_for_notion = None
+    image_filename_for_notion = "telegram_foto.jpg"
     persistent_user_text = ""
     chat_id = update.effective_chat.id
     
@@ -338,9 +546,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await telegram_file.download_to_drive(photo_path)
 
                 with open(photo_path, "rb") as image_file:
+                    image_bytes_for_notion = image_file.read()
                     image_base64 = base64.b64encode(
-                        image_file.read()
+                        image_bytes_for_notion
                     ).decode("utf-8")
+
+                image_filename_for_notion = (
+                    "creator_foto_"
+                    + datetime.datetime.now(
+                        ZoneInfo("Europe/Zurich")
+                    ).strftime("%Y%m%d_%H%M%S")
+                    + ".jpg"
+                )
 
                 image_content_block = {
                     "type": "image",
@@ -517,14 +734,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 notion_success, notion_result = save_to_notion(
                     notion_category,
-                    notion_content
+                    notion_content,
+                    image_bytes=image_bytes_for_notion,
+                    image_filename=image_filename_for_notion
                 )
 
                 if notion_success:
-                    bot_reply += (
-                        f"\n\n✅ Der Eintrag wurde tatsächlich in "
-                        f"„{notion_category}“ gespeichert."
+                    image_saved = (
+                        isinstance(notion_result, dict)
+                        and notion_result.get("image_saved")
                     )
+
+                    if image_bytes_for_notion and image_saved:
+                        bot_reply += (
+                            f"\n\n✅ Der Eintrag und das Bild wurden "
+                            f"tatsächlich in „{notion_category}“ gespeichert."
+                        )
+                    elif image_bytes_for_notion and not image_saved:
+                        bot_reply += (
+                            f"\n\n⚠️ Der Texteintrag wurde in "
+                            f"„{notion_category}“ gespeichert, aber das Bild "
+                            f"konnte nicht hochgeladen werden. Der genaue "
+                            f"Fehler steht im Railway-Log."
+                        )
+                    else:
+                        bot_reply += (
+                            f"\n\n✅ Der Eintrag wurde tatsächlich in "
+                            f"„{notion_category}“ gespeichert."
+                        )
                 else:
                     bot_reply += (
                         "\n\n⚠️ Die Speicherung in Notion ist fehlgeschlagen. "
@@ -578,5 +815,5 @@ if __name__ == "__main__":
         )
     )
     
-    print("✅ CREATOR V4 – BILDVERSTÄNDNIS UND KURZZEITGEDÄCHTNIS AKTIV", flush=True)
+    print("✅ CREATOR V5 – BILDER IN NOTION UND KURZZEITGEDÄCHTNIS AKTIV", flush=True)
     app.run_polling(drop_pending_updates=True)
